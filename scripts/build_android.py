@@ -10,6 +10,27 @@ from build_mirrors import china_mirror_environment, mirrored_pub_lockfile
 from app_build import BuildVariant, add_variant_argument
 
 root = Path(__file__).resolve().parents[1]
+
+
+def remove_stale_plugin_registrant():
+    source = root / 'android' / 'app' / 'src' / 'main' / 'java' / 'io' / 'flutter' / 'plugins'
+    registrant = source / 'GeneratedPluginRegistrant.java'
+    if registrant.is_file():
+        registrant.unlink()
+        print('已清理残留的 ' + str(registrant.relative_to(root)), flush=True)
+    if source.is_dir() and not any(source.iterdir()):
+        source.rmdir()
+
+
+def assert_release_plugin_registrant():
+    registrant = (root / 'android' / 'app' / 'src' / 'main' / 'java' / 'io' / 'flutter' / 'plugins'
+                  / 'GeneratedPluginRegistrant.java')
+    if not registrant.is_file():
+        raise SystemExit('Flutter 未重新生成插件注册文件：' + str(registrant))
+    if 'dev.flutter.plugins.integration_test' in registrant.read_text(encoding='utf-8'):
+        raise SystemExit('release 构建的插件注册文件仍包含 integration_test，构建结果不可用：' + str(registrant))
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--abi', action='append', choices=['arm64-v8a', 'armeabi-v7a', 'x86_64'])
 parser.add_argument('--cn-mirrors', action='store_true', help='使用 Flutter 中国镜像和阿里云 Maven 镜像')
@@ -32,10 +53,12 @@ with china_mirror_environment(environment, options.cn_mirrors) as env, mirrored_
     subprocess.run([sys.executable, str(root / 'scripts' / 'build_native.py'), '--platform', 'android', *abi_args, *variant.arguments],
                    cwd=root, env=env, check=True)
     subprocess.run([flutter, 'pub', 'get', '--enforce-lockfile'], cwd=root, env=env, check=True)
+    remove_stale_plugin_registrant()
     build_args = [flutter, 'build', 'apk', '--release', '--split-per-abi', '--no-pub', *variant.flutter_arguments]
     if options.abi:
         targets = {'arm64-v8a': 'android-arm64', 'armeabi-v7a': 'android-arm', 'x86_64': 'android-x64'}
         build_args += ['--target-platform', ','.join(targets[abi] for abi in options.abi)]
     subprocess.run(build_args, cwd=root, env=env, check=True)
+    assert_release_plugin_registrant()
     subprocess.run([sys.executable, str(root / 'scripts' / 'package_release.py'), '--platform', 'android', *abi_args, *variant.arguments],
                    cwd=root, env=env, check=True)
